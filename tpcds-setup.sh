@@ -17,7 +17,7 @@ if [ ! -f tpcds-gen/target/tpcds-gen-1.0-SNAPSHOT.jar ]; then
 	echo "Please build the data generator with ./tpcds-build.sh first"
 	exit 1
 fi
-which hive > /dev/null 2>&1
+which beeline > /dev/null 2>&1
 if [ $? -ne 0 ]; then
 	echo "Script must be run where Hive is installed"
 	exit 1
@@ -69,20 +69,23 @@ echo "TPC-DS text data generation complete."
 
 # Create the text/flat tables as external tables. These will be later be converted to ORCFile.
 echo "Loading text data into external tables."
-runcommand "hive -i settings/load-flat.sql -f ddl-tpcds/text/alltables.sql -d DB=tpcds_text_${SCALE} -d LOCATION=${DIR}/${SCALE}"
+
+beeline="beeline -u jdbc:hive2://durian-2:10000/ -n hive"
+function render() { eval "echo \"$(cat $1)\""; }
+
+DB="tpcds_text_${SCALE}" LOCATION="${DIR}/${SCALE}" render ddl-tpcds/text/alltables.sql > .q.sql
+runcommand "$beeline -i settings/load-flat.sql -f .q.sql"
+echo "loaded$?"
 
 # Create the partitioned and bucketed tables.
 if [ "X$FORMAT" = "X" ]; then
 	FORMAT=orc
 fi
 
-LOAD_FILE="load_${FORMAT}_${SCALE}.mk"
 SILENCE="2> /dev/null 1> /dev/null" 
 if [ "X$DEBUG_SCRIPT" != "X" ]; then
 	SILENCE=""
 fi
-
-echo -e "all: ${DIMS} ${FACTS}" > $LOAD_FILE
 
 i=1
 total=24
@@ -93,26 +96,32 @@ REDUCERS=$((test ${SCALE} -gt ${MAX_REDUCERS} && echo ${MAX_REDUCERS}) || echo $
 # Populate the smaller tables.
 for t in ${DIMS}
 do
-	COMMAND="hive -i settings/load-partitioned.sql -f ddl-tpcds/bin_partitioned/${t}.sql \
-	    -d DB=tpcds_bin_partitioned_${FORMAT}_${SCALE} -d SOURCE=tpcds_text_${SCALE} \
-            -d SCALE=${SCALE} \
-	    -d REDUCERS=${REDUCERS} \
-	    -d FILE=${FORMAT}"
-	echo -e "${t}:\n\t@$COMMAND $SILENCE && echo 'Optimizing table $t ($i/$total).'" >> $LOAD_FILE
+	DB="tpcds_bin_partitioned_${FORMAT}_${SCALE}"	\
+	SOURCE="tpcds_text_${SCALE}"			\
+	SCALE=${SCALE}					\
+	REDUCERS=${REDUCERS}				\
+	FILE="${FORMAT} TBLPROPERTIES ('transactional'='false')"	\
+	render ddl-tpcds/bin_partitioned/${t}.sql > .q.sql
+
+	echo "Optimizing table $t ($i/$total)..."
+	runcommand "$beeline -i settings/load-partitioned.sql -f .q.sql"
 	i=`expr $i + 1`
 done
 
 for t in ${FACTS}
 do
-	COMMAND="hive -i settings/load-partitioned.sql -f ddl-tpcds/bin_partitioned/${t}.sql \
-	    -d DB=tpcds_bin_partitioned_${FORMAT}_${SCALE} \
-            -d SCALE=${SCALE} \
-	    -d SOURCE=tpcds_text_${SCALE} -d BUCKETS=${BUCKETS} \
-	    -d RETURN_BUCKETS=${RETURN_BUCKETS} -d REDUCERS=${REDUCERS} -d FILE=${FORMAT}"
-	echo -e "${t}:\n\t@$COMMAND $SILENCE && echo 'Optimizing table $t ($i/$total).'" >> $LOAD_FILE
+	DB=tpcds_bin_partitioned_${FORMAT}_${SCALE}	\
+	SCALE=${SCALE} 					\
+	SOURCE=tpcds_text_${SCALE}			\
+	BUCKETS=${BUCKETS}				\
+	RETURN_BUCKETS=${RETURN_BUCKETS}		\
+	REDUCERS=${REDUCERS}				\
+	FILE="${FORMAT} TBLPROPERTIES ('transactional'='false')"	\
+	render ddl-tpcds/bin_partitioned/${t}.sql > .q.sql
+
+	echo "Optimizing table $t ($i/$total)..."
+	runcommand "$beeline -i settings/load-partitioned.sql -f .q.sql"
 	i=`expr $i + 1`
 done
-
-make -j 2 -f $LOAD_FILE
 
 echo "Data loaded into database ${DATABASE}."
