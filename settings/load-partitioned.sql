@@ -5,7 +5,7 @@ set hive.exec.max.dynamic.partitions.pernode=100000;
 set hive.exec.max.dynamic.partitions=100000;
 set hive.exec.max.created.files=1000000;
 set hive.exec.parallel=true;
-set hive.exec.reducers.max=${REDUCERS};
+set hive.exec.reducers.max=5000;
 set hive.stats.autogather=true;
 set hive.optimize.sort.dynamic.partition=true;
 
@@ -27,3 +27,6 @@ set hive.tez.min.partition.factor=0.01;
 -- set mapreduce.map.memory.mb=3072;
 -- set mapreduce.reduce.memory.mb=4096;
 -- set io.sort.mb=800;
+
+
+-- set hive.llap.execution.mode=all;

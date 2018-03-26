@@ -70,7 +70,7 @@ echo "TPC-DS text data generation complete."
 # Create the text/flat tables as external tables. These will be later be converted to ORCFile.
 echo "Loading text data into external tables."
 
-beeline="beeline -u jdbc:hive2://durian-2:10000/ -n hive"
+beeline="beeline -u jdbc:hive2://localhost:10000/ -n hive"
 function render() { eval "echo \"$(cat $1)\""; }
 
 DB="tpcds_text_${SCALE}" LOCATION="${DIR}/${SCALE}" render ddl-tpcds/text/alltables.sql > .q.sql
@@ -93,23 +93,14 @@ DATABASE=tpcds_bin_partitioned_${FORMAT}_${SCALE}
 MAX_REDUCERS=2500 # maximum number of useful reducers for any scale 
 REDUCERS=$((test ${SCALE} -gt ${MAX_REDUCERS} && echo ${MAX_REDUCERS}) || echo ${SCALE})
 
-# Populate the smaller tables.
-for t in ${DIMS}
-do
-	DB="tpcds_bin_partitioned_${FORMAT}_${SCALE}"	\
-	SOURCE="tpcds_text_${SCALE}"			\
-	SCALE=${SCALE}					\
-	REDUCERS=${REDUCERS}				\
-	FILE="${FORMAT} TBLPROPERTIES ('transactional'='false')"	\
-	render ddl-tpcds/bin_partitioned/${t}.sql > .q.sql
+D="load.${SCALE}"
+mkdir -p $D
+TARGETS=""
 
-	echo "Optimizing table $t ($i/$total)..."
-	runcommand "$beeline -i settings/load-partitioned.sql -f .q.sql"
-	i=`expr $i + 1`
-done
-
-for t in ${FACTS}
+for t in ${DIMS} ${FACTS}
 do
+	TARGETS+=" .loaded.$t"
+	
 	DB=tpcds_bin_partitioned_${FORMAT}_${SCALE}	\
 	SCALE=${SCALE} 					\
 	SOURCE=tpcds_text_${SCALE}			\
@@ -117,11 +108,30 @@ do
 	RETURN_BUCKETS=${RETURN_BUCKETS}		\
 	REDUCERS=${REDUCERS}				\
 	FILE="${FORMAT} TBLPROPERTIES ('transactional'='false')"	\
-	render ddl-tpcds/bin_partitioned/${t}.sql > .q.sql
+	render ddl-tpcds/bin_partitioned/${t}.sql > "$D/load.$t.sql"
 
-	echo "Optimizing table $t ($i/$total)..."
-	runcommand "$beeline -i settings/load-partitioned.sql -f .q.sql"
-	i=`expr $i + 1`
+	echo "analyze table tpcds_text_${SCALE}.$t compute statistics for columns;" > "$D/analyze.text.$t.sql"
+
 done
 
+cat > "$D/Makefile" << EOF 
+all:	$TARGETS
+
+.loaded.%:	.load.% 
+	touch \$@
+
+.load.%:	load.%.sql      .analyze.text.%
+	$beeline -i ../settings/load-partitioned.sql -f \$<
+	touch \$@
+
+.analyze.%:	analyze.%.sql
+	$beeline -i ../settings/load-partitioned.sql -f \$<
+	touch \$@
+
+EOF
+
+
+#runcommand "$beeline -i settings/load-partitioned.sql -f $BLS"
+echo "ec: $?"
 echo "Data loaded into database ${DATABASE}."
+
