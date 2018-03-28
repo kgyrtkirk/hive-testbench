@@ -110,7 +110,6 @@ do
 	FILE="${FORMAT} TBLPROPERTIES ('transactional'='false')"	\
 	render ddl-tpcds/bin_partitioned/${t}.sql > "$D/load.$t.sql"
 
-	echo "analyze table tpcds_text_${SCALE}.$t compute statistics for columns;" > "$D/analyze.text.$t.sql"
 	echo "analyze table tpcds_bin_partitioned_orc_${SCALE}.$t compute statistics for columns;" > "$D/analyze.orc.$t.sql"
 
 done
@@ -121,7 +120,7 @@ all:	$TARGETS
 .loaded.%:	.load.% 
 	touch \$@
 
-.load.%:	load.%.sql      .analyze.text.%
+.load.%:	load.%.sql
 	$beeline -i ../settings/load-partitioned.sql -f \$<
 	touch \$@
 
